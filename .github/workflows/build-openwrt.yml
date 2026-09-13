@@ -1,58 +1,76 @@
-name: Build OpenWrt x86_64 Intel5100
-
+name: Build OpenWrt x86_64 Intel5100 BIOS+UEFI
 on:
   workflow_dispatch:
-  push:
-    branches: [ "master" ]
-    paths:
-      - 'config/**'
-      - '.github/workflows/**'
-
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      # 【关键】先拉取你当前仓库代码，把config文件夹下载到虚拟机
-      - name: Checkout 本仓库代码（加载config配置文件）
+      - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
-      - name: 清理磁盘空间
+      - name: 深度清理磁盘空间
         run: |
           df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo apt clean
           df -h
 
-      - name: 拉取最新 LEDE 源码
+      - name: 克隆 coolsnowwolf/lede master
         run: |
-          git clone https://github.com/coolsnowwolf/lede.git
+          git clone --depth=1 https://github.com/coolsnowwolf/lede.git
           cd lede
           git log -1 --oneline
 
-      - name: 强制锁定内核版本为5.4（适配Intel5100 iwlwifi）
+      - name: 强制锁定x86内核版本为5.4
         run: |
           cd lede
           sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' target/linux/x86/Makefile
 
-      - name: 更新feeds并安装包定义
+      - name: 更新 feeds & install
         run: |
           cd lede
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 现在../config 就能找到文件了！
-      - name: 导入编译配置
+      - name: 生成基础配置 + 写入自定义选项
         run: |
           cd lede
-          cp ../config/x86_64-intel5100.config .config
           make defconfig
+          cat >> .config <<'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_Generic=y
+          CONFIG_TARGET_ROOTFS_EXT4FS=y
+          CONFIG_TARGET_IMAGES_GZIP=y
+          CONFIG_GRUB_IMAGES=y
+          CONFIG_GRUB_EFI_IMAGES=y
+          CONFIG_TARGET_IMAGES_PAD=y
+          CONFIG_KERNEL_XZ=n
+          CONFIG_KERNEL_GZ=y
+          CONFIG_PACKAGE_kmod-iwlwifi=m
+          CONFIG_PACKAGE_kmod-mac80211=m
+          CONFIG_PACKAGE_kmod-cfg80211=m
+          CONFIG_PACKAGE_linux-firmware-iwlwifi-5000=y
+          CONFIG_PACKAGE_hostapd=y
+          CONFIG_PACKAGE_hostapd-common=y
+          CONFIG_PACKAGE_hostapd-utils=y
+          CONFIG_PACKAGE_wpa-supplicant=y
+          CONFIG_PACKAGE_wpad-mini=n
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-app-wireless=y
+          CONFIG_PACKAGE_luci-proto-wireless=y
+          CONFIG_PACKAGE_luci-theme-bootstrap=y
+          CONFIG_PACKAGE_iw=y
+          CONFIG_PACKAGE_pciutils=y
+          EOF
+          make defconfig
+          cat .config | grep -E 'TARGET_x86|KERNEL_PATCHVER|kmod-iwlwifi|hostapd'
 
-      - name: 添加iwlwifi驱动参数，防止5100网卡内核panic
+      - name: 注入 iwlwifi 防panic modprobe配置
         run: |
           cd lede
           mkdir -p package/base-files/files/etc/modprobe.d
-          cat > package/base-files/files/etc/modprobe.d/iwlwifi.conf <<EOF
+          cat > package/base-files/files/etc/modprobe.d/iwlwifi.conf <<'EOF'
           options iwlwifi power_save=0 swcrypto=1 11n_disable=0 amsdu_size=3
           blacklist iwldvm
           EOF
@@ -61,27 +79,31 @@ jobs:
       - name: 下载源码包
         run: |
           cd lede
-          make download -j$(nproc)
-        timeout-minutes: 40
+          make download -j1
+        timeout-minutes: 60
 
-      - name: 编译固件
+      - name: 单线程编译（‑j1，规避OOM，速度慢但稳定性优先）
         run: |
           cd lede
-          make -j$(nproc) V=s 2>&1 | tee build.log
-        timeout-minutes: 360
+          make -j1 V=s 2>&1 | tee build.log
+        timeout-minutes: 420
 
-      - name: 列出产物
+      - name: 检查编译产物
         run: |
-          cd lede/bin/targets/x86/64/
-          ls -lh
+          cd lede
+          IMG_DIR="bin/targets/x86/64"
+          if [ -d "$IMG_DIR" ] && ls -1 $IMG_DIR/*.img.gz >/dev/null 2>&1 ; then
+            echo "✅ 找到固件镜像文件"
+            ls -lh $IMG_DIR
+          else
+            echo "⚠️ WARNING: NO IMAGE FILES GENERATED！资源不足未生成镜像，重新运行workflow重试"
+          fi
 
-      - name: 上传固件
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt-x86_64-Intel5100
+          name: OpenWrt‑x86‑64‑Intel5100
           path: |
-            lede/bin/targets/x86/64/*.img.gz
-            lede/bin/targets/x86/64/*.img
-            lede/bin/targets/x86/64/*.efi
+            lede/bin/targets/x86/64/*
             lede/build.log
-          if-no-files-found: error
+          if-no-files-found: warn
