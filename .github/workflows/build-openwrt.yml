@@ -12,6 +12,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
+      # 【关键】先拉取你当前仓库代码，把config文件夹下载到虚拟机
+      - name: Checkout 本仓库代码（加载config配置文件）
+        uses: actions/checkout@v4
+
       - name: 清理磁盘空间
         run: |
           df -h
@@ -37,6 +41,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      # 现在../config 就能找到文件了！
       - name: 导入编译配置
         run: |
           cd lede
@@ -48,9 +53,9 @@ jobs:
           cd lede
           mkdir -p package/base-files/files/etc/modprobe.d
           cat > package/base-files/files/etc/modprobe.d/iwlwifi.conf <<EOF
-          options iwlwifi power_save=0 swcrypto=1 11n_disable=0 amsdu_size=3
-          blacklist iwldvm
-          EOF
+options iwlwifi power_save=0 swcrypto=1 11n_disable=0 amsdu_size=3
+blacklist iwldvm
+EOF
           cat package/base-files/files/etc/modprobe.d/iwlwifi.conf
 
       - name: 下载源码包
