@@ -53,9 +53,9 @@ jobs:
           cd lede
           mkdir -p package/base-files/files/etc/modprobe.d
           cat > package/base-files/files/etc/modprobe.d/iwlwifi.conf <<EOF
-options iwlwifi power_save=0 swcrypto=1 11n_disable=0 amsdu_size=3
-blacklist iwldvm
-EOF
+          options iwlwifi power_save=0 swcrypto=1 11n_disable=0 amsdu_size=3
+          blacklist iwldvm
+          EOF
           cat package/base-files/files/etc/modprobe.d/iwlwifi.conf
 
       - name: 下载源码包
