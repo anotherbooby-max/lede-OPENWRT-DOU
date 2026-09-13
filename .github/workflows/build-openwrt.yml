@@ -1,0 +1,82 @@
+name: Build OpenWrt x86_64 Intel5100
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "master" ]
+    paths:
+      - 'config/**'
+      - '.github/workflows/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 清理磁盘空间
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - name: 拉取最新 LEDE 源码
+        run: |
+          git clone https://github.com/coolsnowwolf/lede.git
+          cd lede
+          git log -1 --oneline
+
+      - name: 强制锁定内核版本为5.4（适配Intel5100 iwlwifi）
+        run: |
+          cd lede
+          sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' target/linux/x86/Makefile
+
+      - name: 更新feeds并安装包定义
+        run: |
+          cd lede
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 导入编译配置
+        run: |
+          cd lede
+          cp ../config/x86_64-intel5100.config .config
+          make defconfig
+
+      - name: 添加iwlwifi驱动参数，防止5100网卡内核panic
+        run: |
+          cd lede
+          mkdir -p package/base-files/files/etc/modprobe.d
+          cat > package/base-files/files/etc/modprobe.d/iwlwifi.conf <<EOF
+          options iwlwifi power_save=0 swcrypto=1 11n_disable=0 amsdu_size=3
+          blacklist iwldvm
+          EOF
+          cat package/base-files/files/etc/modprobe.d/iwlwifi.conf
+
+      - name: 下载源码包
+        run: |
+          cd lede
+          make download -j$(nproc)
+        timeout-minutes: 40
+
+      - name: 编译固件
+        run: |
+          cd lede
+          make -j$(nproc) V=s 2>&1 | tee build.log
+        timeout-minutes: 360
+
+      - name: 列出产物
+        run: |
+          cd lede/bin/targets/x86/64/
+          ls -lh
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt-x86_64-Intel5100
+          path: |
+            lede/bin/targets/x86/64/*.img.gz
+            lede/bin/targets/x86/64/*.img
+            lede/bin/targets/x86/64/*.efi
+            lede/build.log
+          if-no-files-found: error
