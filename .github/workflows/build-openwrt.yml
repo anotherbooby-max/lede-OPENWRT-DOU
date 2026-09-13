@@ -8,31 +8,33 @@ jobs:
       - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
-      - name: 深度清理磁盘空间
+      - name: 深度清理磁盘，释放最大空间
         run: |
           df -h
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
           sudo apt clean
           df -h
 
-      - name: 克隆 coolsnowwolf/lede master
+      - name: 克隆 lede master 源码
         run: |
           git clone --depth=1 https://github.com/coolsnowwolf/lede.git
           cd lede
           git log -1 --oneline
 
-      - name: 强制锁定x86内核版本为5.4
+      - name: 强制锁定x86内核5.4
         run: |
           cd lede
           sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' target/linux/x86/Makefile
 
-      - name: 更新 feeds & install
+      - name: 更新feeds & install
         run: |
           cd lede
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 生成基础配置 + 写入自定义选项
+      - name: 生成基础配置 + 强制写入关键选项
         run: |
           cd lede
           make defconfig
@@ -62,11 +64,17 @@ jobs:
           CONFIG_PACKAGE_luci-theme-bootstrap=y
           CONFIG_PACKAGE_iw=y
           CONFIG_PACKAGE_pciutils=y
+          # 精简：不编译无关插件，节约空间
+          CONFIG_DEVEL=n
+          CONFIG_PACKAGE_luci-app-adguardhome=n
+          CONFIG_PACKAGE_luci-app-openclash=n
           EOF
+          # defconfig归一，自动处理依赖冲突
           make defconfig
-          cat .config | grep -E 'TARGET_x86|KERNEL_PATCHVER|kmod-iwlwifi|hostapd'
+          # 打印关键配置，日志可核查是否生效
+          grep -E 'TARGET_x86|KERNEL_PATCHVER|kmod-iwlwifi|GRUB_EFI|CONFIG_TARGET_ROOTFS_EXT4FS' .config
 
-      - name: 注入 iwlwifi 防panic modprobe配置
+      - name: 注入 iwlwifi 防panic配置
         run: |
           cd lede
           mkdir -p package/base-files/files/etc/modprobe.d
@@ -82,21 +90,25 @@ jobs:
           make download -j1
         timeout-minutes: 60
 
-      - name: 单线程编译（‑j1，规避OOM，速度慢但稳定性优先）
+      - name: 单线程编译 -j1，降低内存压力
         run: |
           cd lede
           make -j1 V=s 2>&1 | tee build.log
-        timeout-minutes: 420
+        timeout-minutes: 480
 
-      - name: 检查编译产物
+      - name: 校验镜像是否生成
         run: |
           cd lede
           IMG_DIR="bin/targets/x86/64"
-          if [ -d "$IMG_DIR" ] && ls -1 $IMG_DIR/*.img.gz >/dev/null 2>&1 ; then
-            echo "✅ 找到固件镜像文件"
+          if [ -d "$IMG_DIR" ];then
             ls -lh $IMG_DIR
+            if ls -1 $IMG_DIR/*.img.gz >/dev/null 2>&1 ; then
+              echo "✅ 镜像文件已生成"
+            else
+              echo "⚠️ WARNING: NO IMAGE FILES GENERATED! 资源不足未生成镜像，重新run workflow重试"
+            fi
           else
-            echo "⚠️ WARNING: NO IMAGE FILES GENERATED！资源不足未生成镜像，重新运行workflow重试"
+            echo "❌ $IMG_DIR 目录不存在"
           fi
 
       - name: 上传产物
